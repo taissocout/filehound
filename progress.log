@@ -1,3 +1,4 @@
 [2026-03-12] #0001  Cleaned up unused imports  // first commit
 [2026-03-12] #0002  Simplified conditional branches  // versão 2.0
 [2026-03-12] #0003  Centralised constants  // 2.1 com erro vamos revisar
+[2026-03-12] #0004  Fixed off-by-one error  // atualização de useragent para evitar ruidos
