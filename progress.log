@@ -3,3 +3,4 @@
 [2026-03-12] #0003  Centralised constants  // 2.1 com erro vamos revisar
 [2026-03-12] #0004  Fixed off-by-one error  // atualização de useragent para evitar ruidos
 [2026-03-12] #0005  Improved error messages  // adicionado função automatica de troca de useragent para
+[2026-03-12] #0006  Refactored module structure  // atualização adicionado transferencia de zona
