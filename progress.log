@@ -8,3 +8,4 @@
 [2026-03-12] #0008  Reorganised folder structure  // chore: inicializa estrutura do filehound
 [2026-03-12] #0009  Fixed off-by-one error  // feat: implementa busca recursiva por extensao
 [2026-03-12] #0010  Reorganised folder structure  // feat: adiciona filtro por tamanho de arquivo
+[2026-03-12] #0011  Cleaned up unused imports  // feat: adiciona filtro por data de modificacao
