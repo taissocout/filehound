@@ -11,3 +11,4 @@
 [2026-03-12] #0011  Cleaned up unused imports  // feat: adiciona filtro por data de modificacao
 [2026-03-12] #0012  Simplified conditional branches  // feat: implementa modo de busca por conteudo com grep
 [2026-03-12] #0013  Reorganised folder structure  // fix: corrige busca em diretorios com espacos no nome
+[2026-03-12] #0014  Reviewed setup instructions  // refactor: extrai logica de filtro para funcoes separada
