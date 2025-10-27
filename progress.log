@@ -14,3 +14,4 @@
 [2026-03-12] #0014  Reviewed setup instructions  // refactor: extrai logica de filtro para funcoes separada
 [2026-03-12] #0015  Extracted helper function  // docs: adiciona README com exemplos de uso
 [2026-03-12] #0016  Updated inline documentation  // style: padroniza saida com rich para melhor UX
+[2026-03-12] #0017  Removed dead code  // test: adiciona estrutura de diretorios fake para teste
