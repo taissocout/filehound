@@ -17,3 +17,4 @@
 [2026-03-12] #0017  Removed dead code  // test: adiciona estrutura de diretorios fake para teste
 [2026-03-12] #0018  Fixed off-by-one error  // feat: adiciona exportacao de resultados em JSON
 [2026-03-12] #0019  Added guard clause  // feat: adiciona suporte a user-agent rotation
+[2026-03-12] #0020  Reorganised folder structure  // feat: implementa transferencia de zona DNS
