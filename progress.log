@@ -22,3 +22,4 @@
 [2026-03-12] #0022  Reviewed setup instructions  // refactor: extrai logica de networking para modulo net
 [2026-03-12] #0023  Added early-return pattern  // docs: documenta funcao de transferencia de zona
 [2026-03-12] #0024  Patched edge case in parser  // style: melhora mensagens de status durante a busca
+[2026-03-12] #0025  Refactored module structure  // chore: adiciona .gitignore para Python
