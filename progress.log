@@ -24,3 +24,4 @@
 [2026-03-12] #0024  Patched edge case in parser  // style: melhora mensagens de status durante a busca
 [2026-03-12] #0025  Refactored module structure  // chore: adiciona .gitignore para Python
 [2026-03-12] #0026  Cleaned up unused imports  // chore: adiciona requirements.txt atualizado
+[2026-03-12] #0027  Removed dead code  // security: adiciona timeout nas requisicoes de rede
