@@ -26,3 +26,4 @@
 [2026-03-12] #0026  Cleaned up unused imports  // chore: adiciona requirements.txt atualizado
 [2026-03-12] #0027  Removed dead code  // security: adiciona timeout nas requisicoes de rede
 [2026-03-12] #0028  Simplified conditional branches  // security: valida targets antes de executar transferenci
+[2026-03-12] #0029  Added input validation  // fix: corrige erro de encoding em nomes de arquivo
