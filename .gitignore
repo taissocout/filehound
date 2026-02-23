@@ -1,0 +1,8 @@
+filehound_*/
+downloads/
+metadata/
+raw/
+urls/
+report/
+*.html
+*.exif.*
