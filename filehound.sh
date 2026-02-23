@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-VERSION="1.7"
+VERSION="1.8"
 
-# Default UA (pode ser sobrescrito via flags)
-UA_DEFAULT="Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Safari/537.36"
+# =========================
+# FileHound — OSINT File Finder + HTML Report (ExifTool)
+# =========================
 
 MAX_BYTES_DEFAULT=$((50*1024*1024))  # 50MB
 
@@ -12,26 +13,63 @@ CREATOR_NAME="Taissocout"
 GITHUB_USER="taissocout"
 LINKEDIN_USER="taissocout_cybersecurity"
 
-# UA mode:
-#  fixed = sempre o mesmo UA
-#  phase = UA por fase (search/download)
-#  rotate = escolhe aleatório (da lista) por request
-UA_MODE="fixed"
-UA_FIXED="$UA_DEFAULT"
-UA_FILE=""
-UA_PHASE=""
+# ---------------- UA ROTATION (default = rotate) ----------------
+# fixed  = sempre o mesmo UA
+# phase  = UA por fase (search/download)
+# rotate = escolhe um UA aleatório por request (DEFAULT)
+UA_MODE="rotate"
+UA_FIXED="FileHound/${VERSION} (Authorized security test)"
 
-# Lista padrão (usada se não passar --ua-file)
+UA_FILE=""      # opcional: arquivo com 1 UA por linha (override da lista default)
+UA_PHASE=""     # search|download
+
+# Lista de UAs conhecidos (desktop + mobile). Você pode editar/expandir.
 UA_LIST_DEFAULT=(
-  "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Safari/537.36"
+  # Chrome (Windows)
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+  # Chrome (Linux)
+  "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
+  "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+  # Chrome (macOS)
+  "Mozilla/5.0 (Macintosh; Intel Mac OS X 13_6) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
+  "Mozilla/5.0 (Macintosh; Intel Mac OS X 12_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+
+  # Firefox (Windows/Linux/macOS)
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:123.0) Gecko/20100101 Firefox/123.0"
   "Mozilla/5.0 (X11; Linux x86_64; rv:123.0) Gecko/20100101 Firefox/123.0"
-  "Mozilla/5.0 (Macintosh; Intel Mac OS X 13_5) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15"
+  "Mozilla/5.0 (Macintosh; Intel Mac OS X 13.6; rv:123.0) Gecko/20100101 Firefox/123.0"
+
+  # Edge (Windows)
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36 Edg/122.0.0.0"
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 Edg/120.0.0.0"
+
+  # Safari (macOS)
+  "Mozilla/5.0 (Macintosh; Intel Mac OS X 13_6) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.3 Safari/605.1.15"
+  "Mozilla/5.0 (Macintosh; Intel Mac OS X 12_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Safari/605.1.15"
+
+  # iPhone Safari
+  "Mozilla/5.0 (iPhone; CPU iPhone OS 17_3 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.3 Mobile/15E148 Safari/604.1"
+  "Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1"
+
+  # Android Chrome
+  "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Mobile Safari/537.36"
+  "Mozilla/5.0 (Linux; Android 13; SM-S918B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36"
 )
 
-# UA list carregada (a partir do arquivo ou default)
 UA_LIST=()
 
-# ---------------- Banner (terminal) ----------------
+# ---------------- Default behavior ----------------
+# Tipos automáticos (todos comuns)
+FILETYPES="pdf,doc,docx,xls,xlsx,ppt,pptx,txt,csv,json,xml,zip,rar,7z,sql,log"
+
+# Engines padrão (ajustável)
+ENGINES="all"
+
+# Mode padrão (urls|download|full)
+MODE="full"
+
+# ---------------- Banner + Tutorial ----------------
 banner_term() {
 cat <<'EOF'
   ______ _ _      _   _                       _
@@ -47,39 +85,76 @@ echo "   v$VERSION"
 echo
 }
 
-quick_help() {
-cat <<'EOF'
-==================== COMO USAR (GUIA RÁPIDO) ====================
+tutorial() {
+cat <<EOF
+==================== COMO USAR (GUIA COMPLETO) ====================
 
-O FileHound faz (fluxo padrão):
-  1) Busca URLs de arquivos públicos (pdf/docx/xlsx/etc) dentro de um domínio (target)
-  2) Baixa os arquivos encontrados (com validação de tipo e tamanho)
-  3) Extrai metadados via exiftool
-  4) Gera relatório HTML e mostra um link file:// para abrir no navegador
+O FileHound é AUTOMÁTICO por padrão:
+  ✅ Busca links (URLs) de arquivos públicos no domínio informado
+  ✅ Baixa os arquivos encontrados (valida tipo/tamanho e evita baixar HTML)
+  ✅ Extrai metadados (exiftool)
+  ✅ Gera relatório em HTML e te dá um link file:// pra abrir no navegador
 
-O que você vai DIGITAR quando a ferramenta pedir:
+O que a ferramenta vai pedir (se você não passar por argumento):
 
 1) TARGET (domínio)
-   Exemplos:
+   Digite APENAS o domínio (sem https://):
      example.com
      businesscorp.com.br
      www.exemplo.com
-   (não precisa colocar https://)
 
 2) REPORT NAME (nome do relatório)
-   Exemplos:
+   Digite o nome SEM .html (ela adiciona automaticamente):
      relatorio
      report_empresa_2026
-   (a ferramenta adiciona .html automaticamente)
+   Saída final será:
+     report/<nome>.html
 
-DICAS:
-- Ela cria uma pasta de output com subpastas (urls, downloads, metadata, report).
-- No final ela mostra um comando xdg-open e o link file:// do HTML.
+O que é "MODE" (se você mudar via flag):
+  - urls      = só lista URLs (não baixa e não gera HTML)
+  - download  = lista + baixa (sem exif e sem HTML)
+  - full      = lista + baixa + exiftool + relatório HTML (RECOMENDADO)
 
-EXEMPLO rápido:
-  ./filehound.sh -t example.com --report-name relatorio
+Sobre User-Agent (UA):
+  - Nesta versão, o padrão é: UA_MODE=rotate (troca automaticamente a cada request)
+  - Você pode alterar:
+      --ua-mode fixed   (UA fixo)
+      --ua-mode phase   (UA por fase: search/download)
+      --ua-mode rotate  (UA aleatório por request)
 
-=================================================================
+EXEMPLOS (copiar/colar):
+
+1) MODO FULL (automático):
+   ./filehound.sh -t example.com --report-name relatorio
+
+2) Escolher engines:
+   ./filehound.sh -t example.com -e brave,bing --report-name relatorio
+
+3) Só URLs (sem baixar):
+   ./filehound.sh -t example.com --mode urls --report-name lista
+
+4) UA fixo (mais rastreável/“profissional”):
+   ./filehound.sh -t example.com --ua-mode fixed --ua "FileHound/${VERSION} (Authorized test)" --report-name relatorio
+
+5) UA por request (já é o padrão):
+   ./filehound.sh -t example.com --ua-mode rotate --report-name relatorio
+
+====================================================================
+
+EOF
+}
+
+usage() {
+  cat <<EOF
+Uso:
+  $0 -t TARGET --report-name NAME
+  $0 [-t TARGET] [--report-name NAME] [-e engines] [--mode urls|download|full]
+     [--max-mb 50] [--ua-mode fixed|phase|rotate] [--ua "UA"] [--ua-file uas.txt]
+
+Exemplos:
+  $0 -t example.com --report-name relatorio
+  $0 -t example.com -e brave,bing --report-name relatorio
+  $0 -t example.com --mode urls --report-name lista
 EOF
 }
 
@@ -105,9 +180,10 @@ PY
   fi
 }
 
-# ---------------- UA handling ----------------
+# ---------------- UA load/pick ----------------
 load_ua_list() {
   UA_LIST=()
+
   if [[ -n "${UA_FILE:-}" ]]; then
     if [[ ! -f "$UA_FILE" ]]; then
       echo "[!] UA file not found: $UA_FILE"
@@ -132,7 +208,6 @@ pick_ua() {
       echo "$UA_FIXED"
       ;;
     phase)
-      # você pode ajustar aqui se quiser outros UAs por fase
       case "${UA_PHASE}" in
         search) echo "${UA_LIST[0]}" ;;
         download) echo "${UA_LIST[1]:-${UA_LIST[0]}}" ;;
@@ -166,7 +241,7 @@ extract_urls_by_ext() {
   grep -Eoi "https?://[^\"' <>]+\.${ext}([?][^\"' <>]+)?" | sanitize_urls
 }
 
-# ---------------- HTTP fetch (search engines) ----------------
+# ---------------- HTTP fetch ----------------
 fetch() {
   local url="$1"
   curl -sL --max-time 25 -A "$(pick_ua)" "$url" || true
@@ -341,125 +416,51 @@ count_software_from_txts() {
     | sort | uniq -c | sort -nr | head -n 25 || true
 }
 
-# ---------------- Interactive options (menus -> STDERR) ----------------
-choose_engines() {
-  {
-    echo "Escolha engines (recomendado: all ou brave,bing):"
-    echo "  1) brave"
-    echo "  2) bing"
-    echo "  3) duckduckgo"
-    echo "  4) yandex"
-    echo "  5) all (recomendado)"
-    echo
-  } >&2
-  read -rp "Opção [1-5] (ex: 5): " opt
-  case "$opt" in
-    1) echo "brave" ;;
-    2) echo "bing" ;;
-    3) echo "ddg" ;;
-    4) echo "yandex" ;;
-    5) echo "all" ;;
-    *) echo "all" ;;
-  esac
-}
-
-choose_mode() {
-  {
-    echo "Escolha o modo:"
-    echo "  1) urls      -> só listar URLs (não baixa)"
-    echo "  2) download  -> listar + baixar (sem exif/sem HTML)"
-    echo "  3) full      -> listar + baixar + exiftool + relatório HTML (RECOMENDADO)"
-    echo
-  } >&2
-  read -rp "Opção [1-3] (ex: 3): " opt
-  case "$opt" in
-    1) echo "urls" ;;
-    2) echo "download" ;;
-    3) echo "full" ;;
-    *) echo "full" ;;
-  esac
-}
-
-# ---------------- Usage ----------------
-usage() {
-  cat <<EOF
-Uso:
-  $0 -t TARGET [--report-name NAME] [-e engines|interactive] [--mode urls|download|full]
-     [--max-mb 50] [--ua-mode fixed|phase|rotate] [--ua "UA"] [--ua-file uas.txt]
-
-Atalhos:
-  - Rodar só com target e report name (automático):
-      $0 -t example.com --report-name relatorio
-
-Exemplos:
-  FULL (automático):
-    ./filehound.sh -t example.com --report-name relatorio
-
-  FULL com engines:
-    ./filehound.sh -t example.com -e brave,bing --report-name report
-
-  Troca de UA por fase (compatibilidade):
-    ./filehound.sh -t example.com --ua-mode phase --report-name report
-
-  UA aleatório por request (compatibilidade):
-    ./filehound.sh -t example.com --ua-mode rotate --ua-file uas.txt --report-name report
-EOF
-}
-
-# ---------------- Defaults (agora AUTOMÁTICO como você pediu) ----------------
+# ---------------- Main args ----------------
 TARGET=""
 OUTDIR=""
-ENGINES="all"
-MODE="full"
-REPORT_BASENAME="REPORT"   # sem .html
+REPORT_BASENAME="REPORT"
 MAX_BYTES="$MAX_BYTES_DEFAULT"
-
-# Tipos de arquivo: automático sempre (todos comuns)
-FILETYPES="pdf,doc,docx,xls,xlsx,ppt,pptx,txt,csv,json,xml,zip,rar,7z,sql,log"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     -t|--target) TARGET="$2"; shift 2 ;;
+    -o|--out) OUTDIR="$2"; shift 2 ;;
     -e|--engines) ENGINES="$2"; shift 2 ;;
     --mode) MODE="$2"; shift 2 ;;
-    -o|--out) OUTDIR="$2"; shift 2 ;;
     --max-mb) MAX_BYTES=$(( "$2" * 1024 * 1024 )); shift 2 ;;
+
     --report-name) REPORT_BASENAME="$2"; shift 2 ;;
 
     --ua-mode) UA_MODE="$2"; shift 2 ;;
     --ua) UA_FIXED="$2"; shift 2 ;;
     --ua-file) UA_FILE="$2"; shift 2 ;;
 
-    --help|-h) usage; exit 0 ;;
+    -h|--help|--ajuda) usage; exit 0 ;;
     *) echo "[!] Argumento inválido: $1"; usage; exit 1 ;;
   esac
 done
 
 banner_term
-quick_help
+tutorial
 
 need_cmd curl
 need_cmd exiftool
 need_cmd file
 need_cmd sha256sum
 
-# Carrega UA list
 load_ua_list
 
 if [[ -z "${TARGET}" ]]; then
   read -rp "Target (ex: example.com ou www.exemplo.com): " TARGET
 fi
 
-# Se usuário quiser interativo para engines/mode, pode (opcional)
-if [[ "${ENGINES}" == "interactive" ]]; then
-  ENGINES="$(choose_engines)"
-fi
-if [[ "${MODE}" == "interactive" ]]; then
-  MODE="$(choose_mode)"
-fi
-
-# Report: sempre garante .html automaticamente
+# Report name: sem .html
 REPORT_BASENAME="${REPORT_BASENAME%.html}"
+if [[ "$REPORT_BASENAME" == "REPORT" ]]; then
+  read -rp "Report name (ex: relatorio | ENTER=REPORT): " rn
+  REPORT_BASENAME="${rn:-REPORT}"
+fi
 REPORT_NAME="${REPORT_BASENAME}.html"
 
 if [[ -z "${OUTDIR}" ]]; then
@@ -467,7 +468,6 @@ if [[ -z "${OUTDIR}" ]]; then
   OUTDIR="filehound_${TARGET}_${TS}"
 fi
 
-# Cria estrutura; report sempre em OUTDIR/report
 mkdir -p "$OUTDIR"/{raw,urls,downloads,metadata,report,logs}
 
 echo
@@ -477,12 +477,13 @@ echo "Filetypes:     $FILETYPES (automático)"
 echo "Engines:       $ENGINES"
 echo "Mode:          $MODE"
 echo "Max size:      $((MAX_BYTES/1024/1024)) MB"
-echo "UA mode:       $UA_MODE"
+echo "UA mode:       $UA_MODE (padrão: rotate)"
 echo "Report name:   $REPORT_NAME"
 echo "Output dir:    $OUTDIR"
 echo "============================================================"
 echo
 
+# ---------------- Search URLs ----------------
 IFS=',' read -r -a exts <<< "$FILETYPES"
 ALL_URLS_FILE="$OUTDIR/urls/all_urls.txt"
 : > "$ALL_URLS_FILE"
@@ -517,19 +518,18 @@ echo "[*] Total unique URLs: $TOTAL_URLS"
 echo "[*] URL list: $ALL_URLS_FILE"
 echo
 
+if [[ "$MODE" == "urls" ]]; then
+  echo "[i] MODE=urls -> finalizado (sem download/metadados/HTML)."
+  exit 0
+fi
+
+# ---------------- Download ----------------
 DOWN_DIR="$OUTDIR/downloads"
 META_DIR="$OUTDIR/metadata"
 REPORT_HTML="$OUTDIR/report/$REPORT_NAME"
 DOWNLOADED_LIST="$OUTDIR/report/downloaded_files.txt"
 : > "$DOWNLOADED_LIST"
 
-# MODE urls -> não baixa
-if [[ "$MODE" == "urls" ]]; then
-  echo "[i] MODE=urls -> skipping download/metadata/report."
-  exit 0
-fi
-
-# DOWNLOAD
 if [[ "$TOTAL_URLS" -gt 0 ]]; then
   echo "[*] Downloading (with validation)..."
   while IFS= read -r u; do
@@ -548,13 +548,12 @@ else
   echo "[*] No URLs found. Skipping download."
 fi
 
-# MODE download -> para aqui
 if [[ "$MODE" == "download" ]]; then
-  echo "[i] MODE=download -> skipping metadata/report."
+  echo "[i] MODE=download -> finalizado (sem metadados/HTML)."
   exit 0
 fi
 
-# FULL: METADATA + HTML
+# ---------------- Metadata + HTML ----------------
 echo
 echo "[*] Extracting metadata (exiftool)..."
 if [[ -s "$DOWNLOADED_LIST" ]]; then
@@ -589,8 +588,7 @@ cat <<EOF
     .banner { color:#a7f3d0; font-size: 12px; line-height: 1.15; overflow:auto; padding:14px; border-radius:12px; background:#0b1220; border:1px solid #1f2a37; }
     .meta { display:flex; gap:12px; flex-wrap:wrap; margin-top:10px; }
     .pill { display:inline-flex; gap:8px; align-items:center; padding:8px 10px; border-radius:999px; background:#0b1220; border:1px solid #1f2a37; font-size:12px; }
-    h1,h2,h3 { margin: 10px 0; }
-    h1 { font-size: 22px; }
+    h2,h3 { margin: 10px 0; }
     h2 { font-size: 16px; opacity:.95; }
     h3 { font-size: 14px; opacity:.9; }
     table { width:100%; border-collapse: collapse; margin-top:10px; }
@@ -678,7 +676,7 @@ cat <<EOF
     </div>
 
     <div class="card">
-      <h2>3) Metadata Highlights (important only)</h2>
+      <h2>3) Metadata Highlights</h2>
       <p class="muted">Extraído via <code>exiftool</code>. Foco em Author/Company/Software/Producer/IDs/Paths.</p>
 EOF
 
@@ -739,8 +737,7 @@ else
 cat <<EOF
     <div class="card">
       <h2>2) Downloads / Metadata</h2>
-      <p class="muted">Nenhum arquivo baixado. Possíveis causas: bloqueio, rate-limit, links não-diretos, consent pages.</p>
-      <p class="muted">Dica: tente <code>-e brave,bing</code> e rode novamente.</p>
+      <p class="muted">Nenhum arquivo baixado. Possíveis causas: bloqueio/rate-limit/links não-diretos/consent pages.</p>
     </div>
 EOF
 fi
@@ -751,7 +748,6 @@ cat <<EOF
       <ul>
         <li>Priorize documentos por <b>Author/Company</b> e <b>CreatorTool/Producer</b> incomuns.</li>
         <li>Procure vazamentos de paths/usuários: <code>C:\\Users\\</code>, <code>/home/</code>, <code>\\\\server\\share</code>.</li>
-        <li>Correlacione achados com OSINT apenas com autorização.</li>
       </ul>
     </div>
 
