@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-VERSION="1.9"
+VERSION="1.9.1"
 
 # =========================
 # FileHound — OSINT File Finder + DNS(AXFR optional) + ExifTool + HTML Report
@@ -11,28 +11,24 @@ VERSION="1.9"
 MAX_BYTES_DEFAULT=$((50*1024*1024))  # 50MB
 MAX_BYTES="$MAX_BYTES_DEFAULT"
 
-# Automatic filetypes (common)
 FILETYPES_DEFAULT="pdf,doc,docx,xls,xlsx,ppt,pptx,txt,csv,json,xml,zip,rar,7z,sql,log"
 FILETYPES="$FILETYPES_DEFAULT"
 
-# Engines default
-ENGINES="all"  # brave,bing,ddg,yandex,ecosia,qwant,swisscows,mojeek,all
+ENGINES="all"        # brave,bing,ddg,yandex,ecosia,qwant,swisscows,mojeek,all
+MODE="full"          # urls|download|full
 
-# Mode default
-MODE="full" # urls|download|full
-
-# Safe timing defaults
-DELAY_MS=1200        # base delay between requests
-JITTER_MS=800        # extra random (0..JITTER_MS)
+# Safe timing defaults (reduce noise / blocks)
+DELAY_MS=1200
+JITTER_MS=800
 DOWNLOAD_DELAY_MS=900
 DOWNLOAD_JITTER_MS=700
 
 # DNS / AXFR module (OFF by default)
 DNS_DISCOVERY="off"  # on|off
 AXFR_RETRIES=2
-AXFR_TIMEOUT=4       # seconds
-AXFR_BACKOFF="2,6"   # seconds, comma list
-MAX_HOSTS=120        # cap to avoid explosion
+AXFR_TIMEOUT=4
+AXFR_BACKOFF="2,6"
+MAX_HOSTS=120
 
 # User-Agent rotation (DEFAULT = rotate)
 UA_MODE="rotate"     # fixed|phase|rotate
@@ -40,8 +36,9 @@ UA_FIXED="FileHound/${VERSION} (Authorized security test)"
 UA_FILE=""           # optional file with 1 UA per line
 UA_PHASE=""          # search|download
 
-# Optional: use lynx dump and/or wget dump as fallback (if installed)
-FETCH_FALLBACK="auto"  # auto|off|on
+# Fetch fallback when engines block HTML parsing
+# auto = use lynx if installed; else try wget if installed
+FETCH_FALLBACK="auto"  # auto|on|off
 
 # Identity in HTML
 CREATOR_NAME="Taissocout"
@@ -50,41 +47,32 @@ LINKEDIN_USER="taissocout_cybersecurity"
 
 # ---------------- UA list (known) ----------------
 UA_LIST_DEFAULT=(
-  # Chrome Windows
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-  # Chrome Linux
   "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
   "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-  # Chrome macOS
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 13_6) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 12_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 
-  # Firefox
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:123.0) Gecko/20100101 Firefox/123.0"
   "Mozilla/5.0 (X11; Linux x86_64; rv:123.0) Gecko/20100101 Firefox/123.0"
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 13.6; rv:123.0) Gecko/20100101 Firefox/123.0"
 
-  # Edge
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36 Edg/122.0.0.0"
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 Edg/120.0.0.0"
 
-  # Safari macOS
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 13_6) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.3 Safari/605.1.15"
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 12_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Safari/605.1.15"
 
-  # iPhone Safari
   "Mozilla/5.0 (iPhone; CPU iPhone OS 17_3 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.3 Mobile/15E148 Safari/604.1"
   "Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1"
 
-  # Android Chrome
   "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Mobile Safari/537.36"
   "Mozilla/5.0 (Linux; Android 13; SM-S918B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36"
 )
-
 UA_LIST=()
 
-# ---------------- Terminal banner + tutorial ----------------
+# ---------------- UI ----------------
 banner_term() {
 cat <<'EOF'
   ______ _ _      _   _                       _
@@ -100,83 +88,98 @@ echo "   v$VERSION"
 echo
 }
 
-tutorial() {
+tutorial_text() {
 cat <<EOF
-==================== COMO USAR (AUTOMÁTICO) ====================
+==================== COMO USAR (RESUMO) ====================
 
-Este FileHound (v${VERSION}) faz tudo automaticamente:
-  1) Busca URLs de arquivos públicos no TARGET (em vários buscadores)
-  2) Baixa os arquivos (valida tipo/tamanho; evita baixar HTML)
-  3) Extrai metadados (exiftool)
+Uso mais comum (FULL automático):
+  ./filehound.sh -t example.com --report-name relatorio
+
+O que ele faz por padrão (MODE=full):
+  1) Procura URLs de arquivos públicos no domínio (e sub-hosts, se DNS/AXFR achar)
+  2) Baixa arquivos válidos (valida tipo e tamanho, evita HTML)
+  3) Extrai metadados com exiftool
   4) Gera relatório HTML em: report/<nome>.html
-  5) Imprime um link file:// para abrir no navegador
+  5) Mostra link file:// para abrir no navegador
 
-O que você vai digitar quando ele pedir:
+DNS Discovery / AXFR (apenas com autorização):
+  ./filehound.sh -t example.com --report-name relatorio --dns on
 
-1) TARGET (domínio)
-   Exemplos:
-     example.com
-     businesscorp.com.br
-     www.exemplo.com
-   (sem https://)
-
-2) REPORT NAME (nome do relatório)
-   Exemplos (SEM .html):
-     relatorio
-     report_empresa_2026
-   Saída:
-     report/<nome>.html
-
-OPCIONAL (avançado):
-- DNS discovery (AXFR) para tentar listar hosts (somente se autorizado):
-    --dns on
-
-EXEMPLOS:
-  Rodar padrão (FULL):
-    ./filehound.sh -t example.com --report-name relatorio
-
-  Com DNS discovery (AXFR opcional + host expansion):
-    ./filehound.sh -t example.com --report-name relatorio --dns on
-
-  Só URLs (sem baixar e sem HTML):
-    ./filehound.sh -t example.com --mode urls --report-name lista
-
-===============================================================
-
+Ajuda completa:
+  ./filehound.sh --help
+=============================================================
 EOF
 }
 
 usage() {
 cat <<EOF
-Uso:
-  $0 -t TARGET --report-name NAME [opções]
+FileHound v${VERSION}
 
-Opções:
-  --mode urls|download|full        (default: full)
-  -e, --engines LIST              (default: all)
-  -f, --filetypes LIST            (default: ${FILETYPES_DEFAULT})
-  --max-mb N                      (default: 50)
-  --delay-ms N                    (default: ${DELAY_MS})
-  --jitter-ms N                   (default: ${JITTER_MS})
-  --download-delay-ms N           (default: ${DOWNLOAD_DELAY_MS})
-  --download-jitter-ms N          (default: ${DOWNLOAD_JITTER_MS})
+USO:
+  ./filehound.sh -t TARGET --report-name NAME [opções]
 
-  --dns on|off                    (default: off)
-  --axfr-retries N                (default: ${AXFR_RETRIES})
-  --axfr-timeout N                (default: ${AXFR_TIMEOUT})
-  --axfr-backoff "2,6,10"         (default: ${AXFR_BACKOFF})
-  --max-hosts N                   (default: ${MAX_HOSTS})
+OBRIGATÓRIO:
+  -t, --target TARGET            Domínio (sem https://). Ex: example.com
+  --report-name NAME             Nome do relatório SEM .html. Ex: relatorio
 
-  --ua-mode fixed|phase|rotate    (default: rotate)
-  --ua "UA string"                (for ua-mode fixed)
-  --ua-file uas.txt               (1 UA per line)
+OPÇÕES PRINCIPAIS:
+  --mode urls|download|full      default: full
+      urls      = só lista URLs (não baixa, não gera HTML)
+      download  = lista + baixa (não gera HTML)
+      full      = lista + baixa + exiftool + HTML
 
-  --fetch-fallback auto|on|off    (default: auto) use lynx/wget text dump if installed
+  -e, --engines LIST             default: all
+      brave,bing,ddg,yandex,ecosia,qwant,swisscows,mojeek,all
 
-Exemplos:
-  $0 -t example.com --report-name relatorio
-  $0 -t example.com --report-name relatorio --dns on
-  $0 -t example.com --mode urls --report-name lista
+  -f, --filetypes LIST           default: ${FILETYPES_DEFAULT}
+      Ex: pdf
+      Ex: pdf,docx,xlsx
+      Ex: ${FILETYPES_DEFAULT}
+
+  --max-mb N                     default: 50
+      Tamanho máximo por arquivo (para evitar downloads enormes)
+
+CONTROLE DE RUÍDO / BLOQUEIO:
+  --delay-ms N                   default: ${DELAY_MS}
+  --jitter-ms N                  default: ${JITTER_MS}
+  --download-delay-ms N          default: ${DOWNLOAD_DELAY_MS}
+  --download-jitter-ms N         default: ${DOWNLOAD_JITTER_MS}
+
+USER-AGENT (UA):
+  --ua-mode fixed|phase|rotate   default: rotate
+      fixed  = usa sempre o mesmo UA (definido por --ua)
+      phase  = UA diferente para search vs download
+      rotate = UA aleatório por request (reduz padrão repetitivo)
+
+  --ua "UA string"               usado com --ua-mode fixed
+  --ua-file uas.txt              arquivo com 1 UA por linha
+
+FALLBACK (quando buscadores bloqueiam HTML):
+  --fetch-fallback auto|on|off   default: auto
+      auto = usa lynx se tiver; senão tenta wget
+      on   = força tentar lynx/wget se existirem
+      off  = desliga fallback
+
+DNS / AXFR (APENAS COM AUTORIZAÇÃO):
+  --dns on|off                   default: off
+  --axfr-retries N               default: ${AXFR_RETRIES}
+  --axfr-timeout N               default: ${AXFR_TIMEOUT}
+  --axfr-backoff "2,6,10"        default: ${AXFR_BACKOFF}
+  --max-hosts N                  default: ${MAX_HOSTS}
+
+EXEMPLOS:
+  FULL automático:
+    ./filehound.sh -t example.com --report-name relatorio
+
+  Só URLs:
+    ./filehound.sh -t example.com --report-name lista --mode urls
+
+  Engines específicas:
+    ./filehound.sh -t example.com --report-name relatorio -e brave,bing
+
+  DNS (AXFR):
+    ./filehound.sh -t example.com --report-name relatorio --dns on
+
 EOF
 }
 
@@ -207,14 +210,10 @@ jitter_sleep() {
 }
 
 urlencode() {
-  if have_cmd python3; then
-    python3 - <<'PY'
+  python3 - <<'PY'
 import urllib.parse, sys
 print(urllib.parse.quote(sys.stdin.read().strip()))
 PY
-  else
-    sed -e 's/ /%20/g' -e 's/:/%3A/g' -e 's/\//%2F/g' -e 's/?/%3F/g' -e 's/&/%26/g'
-  fi
 }
 
 load_ua_list() {
@@ -298,7 +297,6 @@ fetch_curl() {
 
 fetch_lynx_dump() {
   local url="$1"
-  # text dump; useful when HTML parsing gets messy
   lynx --dump -nolist "$url" 2>/dev/null || true
 }
 
@@ -345,15 +343,18 @@ run_engines() {
     url="$(engine_url "$e" "$encoded_q" 2>/dev/null || true)"
     [[ -z "$url" ]] && { echo "[!] Unknown engine: $e" >&2; continue; }
 
-    # HTML capture
     fetch_curl "$url" > "$raw_dir/${e}.html" || true
 
-    # fallback text dump (optional)
+    # fallback (safe fix: no `[[ ... have_cmd wget ]]`)
     if [[ "$FETCH_FALLBACK" != "off" ]]; then
       if have_cmd lynx; then
         fetch_lynx_dump "$url" > "$raw_dir/${e}.dump.txt" || true
-      elif [[ "$FETCH_FALLBACK" == "on" && have_cmd wget ]]; then
-        fetch_wget "$url" > "$raw_dir/${e}.wget.html" || true
+      else
+        if [[ "$FETCH_FALLBACK" == "on" || "$FETCH_FALLBACK" == "auto" ]]; then
+          if have_cmd wget; then
+            fetch_wget "$url" > "$raw_dir/${e}.wget.html" || true
+          fi
+        fi
       fi
     fi
 
@@ -440,7 +441,6 @@ download_one() {
   UA_PHASE="download"
   curl -sL --max-time 90 -A "$(pick_ua)" "$final" -o "$out" || return 1
 
-  # if became HTML, drop it
   if file -b "$out" | grep -qi "html"; then
     rm -f "$out"
     return 1
@@ -449,7 +449,7 @@ download_one() {
   echo "$out"
 }
 
-# ---------------- Metadata extraction (important fields) ----------------
+# ---------------- Metadata extraction ----------------
 top_kv_from_exif_full() {
   local file_txt="$1"
   grep -E '^(File Name|File Type|MIME Type|File Size|Create Date|Modify Date|PDF Producer|Producer|Creator Tool|Creator|Author|Last Modified By|Company|Manager|Department|Title|Subject|Keywords|Language|Template|Revision Number|Document ID|Instance ID|XMP Toolkit|Generator|Application|Software|Converting Tool|Page Count|Host Name|User Name)\s*:' \
@@ -465,12 +465,10 @@ dns_get_ns() {
 dns_try_axfr_once() {
   local target="$1"
   local ns="$2"
-  # returns zone output or empty
   dig @"$ns" AXFR "$target" +time="$AXFR_TIMEOUT" +tries=1 2>/dev/null || true
 }
 
 dns_extract_hosts_from_axfr() {
-  # parse hostnames from AXFR output lines like: host IN A ip
   awk '
     $4 ~ /A|AAAA|CNAME/ {
       gsub(/\.$/,"",$1);
@@ -494,11 +492,11 @@ dns_discovery() {
   echo "$ns_list" | sed 's/^/    [+] NS: /'
 
   echo "[*] Trying AXFR (zone transfer) with limits..."
-  local found="no"
   local retries="$AXFR_RETRIES"
   local backoff_arr
   IFS=',' read -r -a backoff_arr <<< "$AXFR_BACKOFF"
 
+  local found="no"
   while IFS= read -r ns; do
     [[ -z "$ns" ]] && continue
     echo "    [*] NS: $ns"
@@ -508,11 +506,9 @@ dns_discovery() {
       local out
       out="$(dns_try_axfr_once "$target" "$ns")"
 
-      # If successful, AXFR output contains many records and usually "Transfer failed." is absent
       if echo "$out" | grep -qiE "Transfer failed|connection timed out|refused|notauth|SERVFAIL"; then
         :
       else
-        # Heuristic: output has IN SOA and multiple lines
         if echo "$out" | grep -qE "IN[[:space:]]+SOA" && [[ "$(echo "$out" | wc -l | tr -d ' ')" -gt 10 ]]; then
           echo "       [+] AXFR seems SUCCESSFUL on $ns"
           echo "$out" | dns_extract_hosts_from_axfr >> "$out_hosts_file"
@@ -521,7 +517,6 @@ dns_discovery() {
         fi
       fi
 
-      # Backoff sleep
       local s="${backoff_arr[$((i-1))]:-${backoff_arr[-1]:-5}}"
       echo "       - backoff ${s}s"
       sleep "$s"
@@ -533,11 +528,9 @@ dns_discovery() {
   if [[ -s "$out_hosts_file" ]]; then
     sort -u "$out_hosts_file" -o "$out_hosts_file"
 
-    # Keep only hosts within target (basic scope safety)
     grep -E "(^|[.])$(echo "$target" | sed 's/\./\\./g')$" "$out_hosts_file" > "$out_hosts_file.tmp" || true
     mv -f "$out_hosts_file.tmp" "$out_hosts_file"
 
-    # Cap host count
     local hc
     hc="$(wc -l < "$out_hosts_file" | tr -d ' ')"
     if [[ "$hc" -gt "$MAX_HOSTS" ]]; then
@@ -559,38 +552,46 @@ REPORT_BASENAME=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    -t|--target) TARGET="$2"; shift 2 ;;
-    -o|--out) OUTDIR="$2"; shift 2 ;;
-    --report-name) REPORT_BASENAME="$2"; shift 2 ;;
-    --mode) MODE="$2"; shift 2 ;;
-    -e|--engines) ENGINES="$2"; shift 2 ;;
-    -f|--filetypes) FILETYPES="$2"; shift 2 ;;
-    --max-mb) MAX_BYTES=$(( "$2" * 1024 * 1024 )); shift 2 ;;
+    -t|--target) TARGET="${2:-}"; shift 2 ;;
+    -o|--out) OUTDIR="${2:-}"; shift 2 ;;
+    --report-name) REPORT_BASENAME="${2:-}"; shift 2 ;;
+    --mode) MODE="${2:-}"; shift 2 ;;
+    -e|--engines) ENGINES="${2:-}"; shift 2 ;;
+    -f|--filetypes) FILETYPES="${2:-}"; shift 2 ;;
+    --max-mb) MAX_BYTES=$(( "${2:-50}" * 1024 * 1024 )); shift 2 ;;
 
-    --delay-ms) DELAY_MS="$2"; shift 2 ;;
-    --jitter-ms) JITTER_MS="$2"; shift 2 ;;
-    --download-delay-ms) DOWNLOAD_DELAY_MS="$2"; shift 2 ;;
-    --download-jitter-ms) DOWNLOAD_JITTER_MS="$2"; shift 2 ;;
+    --delay-ms) DELAY_MS="${2:-$DELAY_MS}"; shift 2 ;;
+    --jitter-ms) JITTER_MS="${2:-$JITTER_MS}"; shift 2 ;;
+    --download-delay-ms) DOWNLOAD_DELAY_MS="${2:-$DOWNLOAD_DELAY_MS}"; shift 2 ;;
+    --download-jitter-ms) DOWNLOAD_JITTER_MS="${2:-$DOWNLOAD_JITTER_MS}"; shift 2 ;;
 
-    --dns) DNS_DISCOVERY="$2"; shift 2 ;;
-    --axfr-retries) AXFR_RETRIES="$2"; shift 2 ;;
-    --axfr-timeout) AXFR_TIMEOUT="$2"; shift 2 ;;
-    --axfr-backoff) AXFR_BACKOFF="$2"; shift 2 ;;
-    --max-hosts) MAX_HOSTS="$2"; shift 2 ;;
+    --dns) DNS_DISCOVERY="${2:-off}"; shift 2 ;;
+    --axfr-retries) AXFR_RETRIES="${2:-$AXFR_RETRIES}"; shift 2 ;;
+    --axfr-timeout) AXFR_TIMEOUT="${2:-$AXFR_TIMEOUT}"; shift 2 ;;
+    --axfr-backoff) AXFR_BACKOFF="${2:-$AXFR_BACKOFF}"; shift 2 ;;
+    --max-hosts) MAX_HOSTS="${2:-$MAX_HOSTS}"; shift 2 ;;
 
-    --ua-mode) UA_MODE="$2"; shift 2 ;;
-    --ua) UA_FIXED="$2"; shift 2 ;;
-    --ua-file) UA_FILE="$2"; shift 2 ;;
+    --ua-mode) UA_MODE="${2:-$UA_MODE}"; shift 2 ;;
+    --ua) UA_FIXED="${2:-$UA_FIXED}"; shift 2 ;;
+    --ua-file) UA_FILE="${2:-}"; shift 2 ;;
 
-    --fetch-fallback) FETCH_FALLBACK="$2"; shift 2 ;;
+    --fetch-fallback) FETCH_FALLBACK="${2:-$FETCH_FALLBACK}"; shift 2 ;;
 
-    -h|--help|--ajuda) usage; exit 0 ;;
-    *) echo "[!] Argumento inválido: $1"; usage; exit 1 ;;
+    -h|--help|--ajuda)
+      banner_term
+      usage
+      exit 0
+      ;;
+    *)
+      echo "[!] Argumento inválido: $1"
+      usage
+      exit 1
+      ;;
   esac
 done
 
 banner_term
-tutorial
+tutorial_text
 
 # ---------------- Dependencies ----------------
 need_cmd curl
@@ -628,7 +629,7 @@ if [[ "$DNS_DISCOVERY" == "on" ]]; then
   dns_discovery "$TARGET" "$HOSTS_FILE" || true
 fi
 
-# Prepare list of "site:" scopes: base target + discovered hosts
+# Prepare list of scopes: base target + discovered hosts
 SITES_FILE="$OUTDIR/report/sites.txt"
 : > "$SITES_FILE"
 echo "$TARGET" >> "$SITES_FILE"
@@ -642,25 +643,24 @@ echo "==================== RESUMO DA EXECUÇÃO ===================="
 echo "Target:          $TARGET"
 echo "Mode:            $MODE"
 echo "Engines:         $ENGINES"
-echo "Filetypes:       $FILETYPES (auto)"
+echo "Filetypes:       $FILETYPES"
 echo "DNS discovery:   $DNS_DISCOVERY"
 echo "Hosts (AXFR):    $(wc -l < "$HOSTS_FILE" 2>/dev/null | tr -d ' ' || echo 0)"
 echo "Max size:        $((MAX_BYTES/1024/1024)) MB"
 echo "UA mode:         $UA_MODE"
+echo "Fetch fallback:  $FETCH_FALLBACK"
 echo "Report:          report/$REPORT_NAME"
 echo "Output dir:      $OUTDIR"
 echo "============================================================"
 echo
 
-# ---------------- Search URLs (base + hosts) ----------------
+# ---------------- Search URLs ----------------
 ALL_URLS_FILE="$OUTDIR/urls/all_urls.txt"
 : > "$ALL_URLS_FILE"
-
 IFS=',' read -r -a exts <<< "$FILETYPES"
 
 while IFS= read -r site; do
   [[ -z "$site" ]] && continue
-
   echo "[*] Scope site:$site"
 
   for ext in "${exts[@]}"; do
@@ -679,16 +679,13 @@ while IFS= read -r site; do
     URLS_EXT_FILE="$OUTDIR/urls/${site}_${ext}.txt"
     : > "$URLS_EXT_FILE"
 
-    # Extract from HTML + optional dumps
     cat "$RAW_DIR"/*.html 2>/dev/null | extract_urls_by_ext "$ext" >> "$URLS_EXT_FILE" || true
     cat "$RAW_DIR"/*.dump.txt 2>/dev/null | extract_urls_by_ext "$ext" >> "$URLS_EXT_FILE" || true
     cat "$RAW_DIR"/*.wget.html 2>/dev/null | extract_urls_by_ext "$ext" >> "$URLS_EXT_FILE" || true
 
     sanitize_urls < "$URLS_EXT_FILE" > "$URLS_EXT_FILE.tmp" && mv "$URLS_EXT_FILE.tmp" "$URLS_EXT_FILE"
 
-    local_count="$(wc -l < "$URLS_EXT_FILE" | tr -d ' ')"
-    echo "        -> ${local_count} URLs"
-
+    echo "        -> $(wc -l < "$URLS_EXT_FILE" | tr -d ' ') URLs"
     cat "$URLS_EXT_FILE" >> "$ALL_URLS_FILE"
   done
 done < "$SITES_FILE"
@@ -712,7 +709,7 @@ META_DIR="$OUTDIR/metadata"
 REPORT_HTML="$OUTDIR/report/$REPORT_NAME"
 
 DOWNLOADED_LIST="$OUTDIR/report/downloaded_files.txt"
-DOWNLOAD_MAP="$OUTDIR/report/download_map.tsv"   # url \t saved_path
+DOWNLOAD_MAP="$OUTDIR/report/download_map.tsv"
 : > "$DOWNLOADED_LIST"
 : > "$DOWNLOAD_MAP"
 
@@ -808,6 +805,7 @@ cat <<EOF
         <div class="pill"><b>DNS</b> <span class="muted">${DNS_DISCOVERY} (hosts:${HOST_COUNT})</span></div>
         <div class="pill"><b>Max</b> <span class="muted">$((MAX_BYTES/1024/1024))MB</span></div>
         <div class="pill"><b>UA mode</b> <span class="muted">${UA_MODE}</span></div>
+        <div class="pill"><b>Fallback</b> <span class="muted">${FETCH_FALLBACK}</span></div>
       </div>
       <div class="hr"></div>
       <div class="footer">
@@ -822,7 +820,6 @@ cat <<EOF
 
 EOF
 
-# Hosts section
 if [[ "$DNS_DISCOVERY" == "on" ]]; then
   cat <<EOF
     <div class="card">
@@ -841,7 +838,6 @@ EOF
 EOF
 fi
 
-# URLs section
 cat <<EOF
     <div class="card">
       <h2>1) URLs Found</h2>
@@ -865,7 +861,6 @@ cat <<EOF
     </div>
 EOF
 
-# Downloads + per-file analysis
 if [[ -s "$DOWNLOADED_LIST" ]]; then
 cat <<EOF
     <div class="card">
@@ -908,8 +903,6 @@ while IFS= read -r f; do
   [[ ! -f "$txt" ]] && continue
 
   bne="$(printf "%s" "$bn" | html_escape)"
-
-  # try map original URL
   src_url="$(awk -v p="$f" -F'\t' '$2==p{print $1; exit}' "$DOWNLOAD_MAP" 2>/dev/null || true)"
   src_url_e="$(printf "%s" "${src_url:-}" | html_escape)"
 
@@ -932,7 +925,6 @@ cat <<EOF
     <div class="card">
       <h2>2) Downloads / Metadata</h2>
       <p class="muted">Nenhum arquivo baixado. Possíveis causas: bloqueio/rate-limit/links não-diretos.</p>
-      <p class="muted">Dica: tente mudar engines: <code>-e brave,bing</code> ou aumentar delays.</p>
     </div>
 EOF
 fi
@@ -972,4 +964,3 @@ echo
 echo "[i] Abrir no navegador:"
 echo "    xdg-open \"$(readlink -f "$REPORT_HTML")\""
 echo
-

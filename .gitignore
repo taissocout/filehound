@@ -1,8 +1,61 @@
+```gitignore
+# -----------------------------
+# FileHound - outputs / reports
+# -----------------------------
 filehound_*/
-downloads/
-metadata/
-raw/
-urls/
-report/
-*.html
-*.exif.*
+**/raw/
+**/urls/
+**/downloads/
+**/metadata/
+**/report/
+**/logs/
+
+# Se você quiser manter o relatório e ignorar o resto, comente as linhas acima
+# e use algo como:
+# filehound_*/
+# !filehound_*/report/*.html
+
+# -----------------------------
+# OS / editor / temp files
+# -----------------------------
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*.tmp
+*.temp
+*~
+*.bak
+
+# -----------------------------
+# Shell / logs
+# -----------------------------
+*.log
+nohup.out
+
+# -----------------------------
+# Python (caso use helpers)
+# -----------------------------
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.venv/
+venv/
+env/
+
+# -----------------------------
+# Node (se algum dia gerar HTML via tooling)
+# -----------------------------
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# -----------------------------
+# IDEs
+# -----------------------------
+.vscode/
+.idea/
+```
+
