@@ -1,17 +1,26 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-VERSION="1.6"
+# =========================================================
+# FileHound — OSINT File Finder + Metadata + HTML Report
+# Creator: Taissocout (github.com/taissocout | linkedin.com/in/taissocout_cybersecurity)
+# =========================================================
+
+VERSION="2.0"
+
 UA="Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Safari/537.36"
+
+# Defaults (automatic mode)
+DEFAULT_ENGINES="all"
+DEFAULT_FILETYPES="pdf,doc,docx,xls,xlsx,ppt,pptx,odt,ods,odp,rtf,txt,csv,json,xml,yml,yaml,zip,rar,7z,sql,log,conf,ini,env,bak,old,tar,gz,tgz"
 MAX_BYTES_DEFAULT=$((50*1024*1024))  # 50MB
+SLEEP_BETWEEN_REQ=1
 
 CREATOR_NAME="Taissocout"
 GITHUB_USER="taissocout"
 LINKEDIN_USER="taissocout_cybersecurity"
 
-SHOW_TIPS="yes"
-
-# ---------------- Banner + Tutorial (terminal) ----------------
+# ---------------- Banner (terminal) ----------------
 banner_term() {
 cat <<'EOF'
   ______ _ _      _   _                       _
@@ -27,70 +36,37 @@ echo "   v$VERSION"
 echo
 }
 
+# ---------------- Minimal tutorial (terminal) ----------------
 tutorial_block() {
 cat <<'EOF'
-==================== COMO USAR (GUIA RÁPIDO) ====================
+==================== COMO USAR (AUTOMÁTICO) ====================
 
-O FileHound SEMPRE faz:
-  1) Procurar links (URLs) de arquivos públicos dentro de um domínio (target)
+Agora é 100% simples:
 
-Depois, depende do MODO que você escolhe:
+1) Você só informa:
+   - TARGET (domínio)  -> exemplo: example.com ou empresa.com.br
+   - NOME do relatório -> exemplo: relatorio (o .html é adicionado sozinho)
 
-MODOS (você escolhe 1 deles):
-  - urls      = só listar as URLs encontradas
-  - download  = listar as URLs + baixar os arquivos
-  - full      = listar + baixar + analisar metadados (exiftool) + gerar relatório HTML (RECOMENDADO)
+2) A ferramenta automaticamente:
+   - Pesquisa em vários buscadores
+   - Procura vários tipos de arquivo (pdf, docx, xlsx, zip, etc)
+   - Baixa os arquivos (com validação)
+   - Extrai metadados (exiftool)
+   - Gera um relatório HTML e mostra o link file:// para abrir no navegador
 
-O que você vai DIGITAR quando a ferramenta pedir:
+DICA:
+- Se não achar nada, tente outro domínio ou aumente --max-mb (caso arquivos grandes).
 
-1) TARGET (domínio)
-   Exemplo do que digitar:
-     example.com
-     businesscorp.com.br
-     www.exemplo.com
-   (não precisa colocar https://)
-
-2) FILETYPES (tipos de arquivo)
-   Você escolhe:
-     - Um tipo:        pdf
-     - Vários tipos:   pdf,docx,xlsx
-     - ALL (comuns):   pega vários tipos automaticamente
-
-3) ENGINES (buscadores)
-   Recomendo usar:
-     all  (para achar mais coisas)
-   ou:
-     brave,bing (mais rápido e costuma funcionar bem)
-
-4) MODE (modo)
-   Se você quer relatório + metadados, escolha:
-     full
-
-5) REPORT NAME (nome do HTML)
-   Exemplo do que digitar:
-     relatorio.html
-     report_empresa.html
-   (se apertar ENTER, usa REPORT.html)
-
-EXEMPLOS (copiar/colar):
-  FULL (PDF):
-    ./filehound.sh -t example.com -f pdf -e brave,bing --mode full --report-name relatorio.html
-
-  FULL (vários tipos):
-    ./filehound.sh -t example.com -f "pdf,docx,xlsx" -e all --mode full --report-name report.html
-
-  Só URLs (rápido):
-    ./filehound.sh -t example.com -f pdf --mode urls
-
-=================================================================
+===============================================================
 EOF
 echo
 }
 
+# ---------------- Helpers ----------------
 need_cmd() {
   command -v "$1" >/dev/null 2>&1 || {
-    echo "[!] Missing dependency: $1"
-    echo "    Install: sudo apt-get update && sudo apt-get install -y $1"
+    echo "[!] Dependência ausente: $1"
+    echo "    Instale: sudo apt-get update && sudo apt-get install -y $1"
     exit 1
   }
 }
@@ -114,8 +90,7 @@ sanitize_urls() {
     -e 's/%2F/\//gI' \
     -e 's/%3A/:/gI' \
     -e 's/[)\],.;]+$//g' \
-  | awk 'NF' \
-  | sort -u
+  | awk 'NF' | sort -u
 }
 
 extract_urls_by_ext() {
@@ -166,19 +141,14 @@ run_engines() {
         engine_mojeek    "$encoded_q" > "$raw_dir/mojeek.html"
         ;;
       *)
-        echo "[!] Unknown engine: $e"
+        echo "[!] Engine desconhecido: $e (ignorando)"
         ;;
     esac
-    sleep 1
+    sleep "$SLEEP_BETWEEN_REQ"
   done
 }
 
 # ---------------- Download + validation ----------------
-is_probably_file() {
-  local url="$1"
-  [[ "$url" =~ \.(pdf|doc|docx|xls|xlsx|ppt|pptx|txt|csv|json|xml|zip|rar|7z|sql|log)($|\?) ]]
-}
-
 head_info() {
   local url="$1"
   curl -sIL --max-time 20 -A "$UA" "$url" \
@@ -199,18 +169,19 @@ should_download() {
     return 1
   fi
 
-  if [[ -z "$ct" ]]; then
-    is_probably_file "$url" && { echo "$final"; return 0; }
-    return 1
-  fi
-
-  if echo "$ct" | grep -Eq \
-    "application/pdf|application/msword|application/vnd\.openxmlformats-officedocument|application/vnd\.ms|text/plain|text/csv|application/zip|application/x-7z-compressed|application/x-rar|application/octet-stream|application/xml|text/xml|application/json|text/json"; then
+  # Accept a broad set of "file-ish" content types
+  if [[ -n "$ct" ]] && echo "$ct" | grep -Eq \
+    "application/pdf|application/msword|application/vnd\.openxmlformats-officedocument|application/vnd\.ms|text/plain|text/csv|application/zip|application/x-7z-compressed|application/x-rar|application/octet-stream|application/xml|text/xml|application/json|text/json|application/gzip|application/x-tar"; then
     echo "$final"
     return 0
   fi
 
-  is_probably_file "$url" && { echo "$final"; return 0; }
+  # If no content-type, still allow (we'll validate after download using `file`)
+  if [[ -z "$ct" ]]; then
+    echo "$final"
+    return 0
+  fi
+
   return 1
 }
 
@@ -243,15 +214,27 @@ download_one() {
   local url="$1"
   local out_dir="$2"
   local final name out
+
   final="$(should_download "$url")" || return 1
   name="$(safe_filename_from_url "$final")"
   out="$(unique_path "$out_dir/$name")"
 
   curl -sL --max-time 90 -A "$UA" "$final" -o "$out" || return 1
+
+  # Validate not HTML
   if file -b "$out" | grep -qi "html"; then
     rm -f "$out"
     return 1
   fi
+
+  # Validate size (post-download)
+  local sz
+  sz="$(stat -c%s "$out" 2>/dev/null || echo 0)"
+  if [[ "$sz" -gt "${MAX_BYTES:-$MAX_BYTES_DEFAULT}" ]]; then
+    rm -f "$out"
+    return 1
+  fi
+
   echo "$out"
 }
 
@@ -281,7 +264,7 @@ EOF
 
 top_kv_from_exif_full() {
   local file_txt="$1"
-  grep -E '^(File Name|File Type|MIME Type|File Size|Create Date|Modify Date|PDF Producer|Producer|Creator Tool|Creator|Author|Last Modified By|Company|Manager|Department|Title|Subject|Keywords|Language|Template|Revision Number|Document ID|Instance ID|XMP Toolkit|Generator|Application|Software|Converting Tool|Page Count)\s*:' \
+  grep -E '^(File Name|File Type|MIME Type|File Size|Create Date|Modify Date|PDF Producer|Producer|Creator Tool|Creator|Author|Last Modified By|Company|Manager|Department|Title|Subject|Keywords|Language|Template|Revision Number|Document ID|Instance ID|XMP Toolkit|Generator|Application|Software|Converting Tool|Page Count|Host Name|User Name|Hyperlinks)\s*:' \
     "$file_txt" 2>/dev/null || true
 }
 
@@ -289,159 +272,111 @@ count_software_from_txts() {
   local meta_dir="$1"
   grep -RhsE '^(Creator Tool|Producer|PDF Producer|Software|Application|Generator)\s*:' "$meta_dir" \
     | sed -E 's/^[^:]+:\s*//g' \
-    | awk 'NF' \
-    | sort | uniq -c | sort -nr | head -n 25 || true
+    | awk 'NF' | sort | uniq -c | sort -nr | head -n 25 || true
 }
 
-# ---------------- Interactive (with examples) ----------------
-choose_filetypes() {
-  echo "Escolha tipos de arquivo (exemplos: pdf OU pdf,docx,xlsx):"
-  echo "  1) Um tipo (ex: pdf)"
-  echo "  2) Vários tipos (ex: pdf,docx,xlsx)"
-  echo "  3) ALL (comuns) -> pega vários tipos automaticamente"
-  echo
-  read -rp "Opção [1-3] (ex: 3): " opt
-  case "$opt" in
-    1) read -rp "Extensão (ex: pdf): " one; echo "${one,,}" ;;
-    2) read -rp "Extensões (ex: pdf,docx,xlsx): " many; echo "${many,,}" ;;
-    3) echo "pdf,doc,docx,xls,xlsx,ppt,pptx,txt,csv,json,xml,zip,rar,7z,sql,log" ;;
-    *) echo "pdf" ;;
-  esac
-}
-
-choose_engines() {
-  echo "Escolha engines (recomendado: all ou brave,bing):"
-  echo "  1) brave"
-  echo "  2) bing"
-  echo "  3) duckduckgo"
-  echo "  4) yandex"
-  echo "  5) all (recomendado)"
-  echo
-  read -rp "Opção [1-5] (ex: 5): " opt
-  case "$opt" in
-    1) echo "brave" ;;
-    2) echo "bing" ;;
-    3) echo "ddg" ;;
-    4) echo "yandex" ;;
-    5) echo "all" ;;
-    *) echo "all" ;;
-  esac
-}
-
-choose_mode() {
-  echo "Escolha o modo:"
-  echo "  1) urls      -> só listar URLs (não baixa)"
-  echo "  2) download  -> listar + baixar (sem exif/sem HTML)"
-  echo "  3) full      -> listar + baixar + exiftool + relatório HTML (RECOMENDADO)"
-  echo
-  read -rp "Opção [1-3] (ex: 3): " opt
-  case "$opt" in
-    1) echo "urls" ;;
-    2) echo "download" ;;
-    3) echo "full" ;;
-    *) echo "full" ;;
-  esac
-}
-
+# ---------------- CLI ----------------
 usage() {
   cat <<EOF
 FileHound v$VERSION
 
-Uso:
-  $0 -t TARGET [-f types|interactive] [-e engines|interactive] [-o outdir]
-     [--mode urls|download|full] [--report-name NAME.html] [--max-mb 50]
-     [--no-tips]
+Uso (automático):
+  $0 -t TARGET -r REPORT_NAME
 
 Exemplos:
-  $0 -t example.com -f pdf -e brave,bing --mode full --report-name relatorio.html
-  $0 -t example.com -f "pdf,docx,xlsx" -e all --mode full --report-name report.html
-  $0 -t example.com -f pdf --mode urls
+  $0 -t example.com -r relatorio
+  $0 -t businesscorp.com.br -r report_empresa --max-mb 100
+
+Opções:
+  -t, --target     Domínio alvo (ex: example.com)
+  -r, --report     Nome do relatório (sem .html)  -> ex: relatorio
+  -o, --out        Pasta base de output (opcional)
+  -e, --engines    Engines (default: all)
+  -f, --filetypes  Extensões (default: lista grande)
+  --max-mb         Limite máximo por arquivo (default: 50)
+  --no-tutorial    Não mostrar tutorial no início
 EOF
 }
 
 TARGET=""
-FILETYPES="interactive"
-ENGINES="interactive"
+REPORT_BASE=""
 OUTDIR=""
-MODE=""                  # if empty -> ask
-DO_DOWNLOAD="yes"
+ENGINES="$DEFAULT_ENGINES"
+FILETYPES="$DEFAULT_FILETYPES"
 MAX_BYTES="$MAX_BYTES_DEFAULT"
-REPORT_NAME="REPORT.html"
+SHOW_TUTORIAL="yes"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     -t|--target) TARGET="$2"; shift 2 ;;
-    -f|--filetypes) FILETYPES="$2"; shift 2 ;;
-    -e|--engines) ENGINES="$2"; shift 2 ;;
+    -r|--report) REPORT_BASE="$2"; shift 2 ;;
     -o|--out) OUTDIR="$2"; shift 2 ;;
-    --mode) MODE="$2"; shift 2 ;;
-    --report-name) REPORT_NAME="$2"; shift 2 ;;
+    -e|--engines) ENGINES="$2"; shift 2 ;;
+    -f|--filetypes) FILETYPES="$2"; shift 2 ;;
     --max-mb) MAX_BYTES=$(( "$2" * 1024 * 1024 )); shift 2 ;;
-    --no-download) DO_DOWNLOAD="no"; shift 1 ;;
-    --no-tips) SHOW_TIPS="no"; shift 1 ;;
+    --no-tutorial) SHOW_TUTORIAL="no"; shift 1 ;;
     -h|--help) usage; exit 0 ;;
     *) echo "[!] Argumento inválido: $1"; usage; exit 1 ;;
   esac
 done
 
 banner_term
-[[ "$SHOW_TIPS" == "yes" ]] && tutorial_block
+[[ "$SHOW_TUTORIAL" == "yes" ]] && tutorial_block
 
 need_cmd curl
 need_cmd exiftool
 need_cmd file
 need_cmd sha256sum
+need_cmd awk
+need_cmd sed
+need_cmd sort
+need_cmd grep
+need_cmd stat
+need_cmd readlink
 
 if [[ -z "${TARGET}" ]]; then
-  read -rp "Target (ex: example.com ou www.exemplo.com): " TARGET
+  read -rp "Target (ex: example.com ou empresa.com.br): " TARGET
 fi
 
-if [[ "${FILETYPES}" == "interactive" ]]; then
-  FILETYPES="$(choose_filetypes)"
-elif [[ "${FILETYPES}" == "all" ]]; then
-  FILETYPES="pdf,doc,docx,xls,xlsx,ppt,pptx,txt,csv,json,xml,zip,rar,7z,sql,log"
+if [[ -z "${REPORT_BASE}" ]]; then
+  read -rp "Nome do relatório (ex: relatorio ou report_empresa): " REPORT_BASE
 fi
 
-if [[ "${ENGINES}" == "interactive" ]]; then
-  ENGINES="$(choose_engines)"
-fi
-
-if [[ -z "${MODE}" ]]; then
-  MODE="$(choose_mode)"
-fi
-
-if [[ "$MODE" == "urls" ]]; then DO_DOWNLOAD="no"; fi
-
-# report name only matters on full
-if [[ "$MODE" == "full" && "${REPORT_NAME}" == "REPORT.html" ]]; then
-  read -rp "Nome do relatório HTML (ex: relatorio.html) [REPORT.html]: " rn
-  REPORT_NAME="${rn:-REPORT.html}"
-fi
+# Sanitize report base + add .html
+REPORT_BASE="${REPORT_BASE//[^a-zA-Z0-9._-]/_}"
+[[ -z "$REPORT_BASE" ]] && REPORT_BASE="REPORT"
+REPORT_NAME="${REPORT_BASE}.html"
 
 if [[ -z "${OUTDIR}" ]]; then
   TS="$(date +%Y%m%d_%H%M%S)"
   OUTDIR="filehound_${TARGET}_${TS}"
 fi
 
-# Show final summary (so user knows what's happening)
+# Create folders (including report/)
+mkdir -p "$OUTDIR"/{raw,urls,downloads,metadata,report}
+
+ALL_URLS_FILE="$OUTDIR/urls/all_urls.txt"
+DOWNLOADED_LIST="$OUTDIR/report/downloaded_files.txt"
+REPORT_HTML="$OUTDIR/report/$REPORT_NAME"
+DOWN_DIR="$OUTDIR/downloads"
+META_DIR="$OUTDIR/metadata"
+
+: > "$ALL_URLS_FILE"
+: > "$DOWNLOADED_LIST"
+
 echo
-echo "==================== RESUMO DA EXECUÇÃO ===================="
+echo "==================== EXECUÇÃO AUTOMÁTICA ===================="
 echo "Target:        $TARGET"
-echo "Filetypes:     $FILETYPES"
 echo "Engines:       $ENGINES"
-echo "Mode:          $MODE"
-echo "Download:      $DO_DOWNLOAD"
+echo "Filetypes:     $FILETYPES"
 echo "Max size:      $((MAX_BYTES/1024/1024)) MB"
 echo "Output dir:    $OUTDIR"
-echo "Report name:   $REPORT_NAME"
+echo "Report file:   report/$REPORT_NAME"
 echo "============================================================"
 echo
 
-mkdir -p "$OUTDIR"/{raw,urls,downloads,metadata,report}
-
+# Search across all filetypes
 IFS=',' read -r -a exts <<< "$FILETYPES"
-ALL_URLS_FILE="$OUTDIR/urls/all_urls.txt"
-: > "$ALL_URLS_FILE"
 
 for ext in "${exts[@]}"; do
   ext="$(echo "$ext" | tr '[:upper:]' '[:lower:]' | xargs)"
@@ -458,12 +393,13 @@ for ext in "${exts[@]}"; do
 
   URLS_EXT_FILE="$OUTDIR/urls/${ext}.txt"
   : > "$URLS_EXT_FILE"
+
   cat "$RAW_DIR"/*.html 2>/dev/null | extract_urls_by_ext "$ext" >> "$URLS_EXT_FILE" || true
   sanitize_urls < "$URLS_EXT_FILE" > "$URLS_EXT_FILE.tmp" && mv "$URLS_EXT_FILE.tmp" "$URLS_EXT_FILE"
 
-  echo "    -> $(wc -l < "$URLS_EXT_FILE" | tr -d ' ') URLs found for .${ext}"
+  echo "    -> $(wc -l < "$URLS_EXT_FILE" | tr -d ' ') URLs found"
   cat "$URLS_EXT_FILE" >> "$ALL_URLS_FILE"
-  sleep 1
+  sleep "$SLEEP_BETWEEN_REQ"
 done
 
 sanitize_urls < "$ALL_URLS_FILE" > "$ALL_URLS_FILE.tmp" && mv "$ALL_URLS_FILE.tmp" "$ALL_URLS_FILE"
@@ -471,17 +407,12 @@ TOTAL_URLS="$(wc -l < "$ALL_URLS_FILE" | tr -d ' ')"
 
 echo
 echo "[*] Total unique URLs: $TOTAL_URLS"
-echo "[*] URL list: $ALL_URLS_FILE"
+echo "[*] URL list saved:    $ALL_URLS_FILE"
 echo
 
-DOWN_DIR="$OUTDIR/downloads"
-META_DIR="$OUTDIR/metadata"
-REPORT_HTML="$OUTDIR/report/$REPORT_NAME"
-DOWNLOADED_LIST="$OUTDIR/report/downloaded_files.txt"
-: > "$DOWNLOADED_LIST"
-
-if [[ "$DO_DOWNLOAD" == "yes" && "$TOTAL_URLS" -gt 0 ]]; then
-  echo "[*] Downloading (with validation)..."
+# Download everything (validated)
+if [[ "$TOTAL_URLS" -gt 0 ]]; then
+  echo "[*] Downloading (validation on)..."
   while IFS= read -r u; do
     [[ -z "$u" ]] && continue
     if out="$(download_one "$u" "$DOWN_DIR" 2>/dev/null)"; then
@@ -490,32 +421,34 @@ if [[ "$DO_DOWNLOAD" == "yes" && "$TOTAL_URLS" -gt 0 ]]; then
     else
       echo "    [-] SKIP: $u"
     fi
-    sleep 1
+    sleep "$SLEEP_BETWEEN_REQ"
   done < "$ALL_URLS_FILE"
   sort -u "$DOWNLOADED_LIST" -o "$DOWNLOADED_LIST"
-  echo "    -> $(wc -l < "$DOWNLOADED_LIST" | tr -d ' ') valid files downloaded"
-else
-  echo "[*] Download disabled or no URLs found."
 fi
 
-if [[ "$MODE" == "full" ]]; then
-  echo
-  echo "[*] Extracting metadata (exiftool)..."
-  if [[ -s "$DOWNLOADED_LIST" ]]; then
-    while IFS= read -r f; do
-      bn="$(basename "$f")"
-      safe="${bn//[^a-zA-Z0-9._-]/_}"
-      exiftool "$f" > "$META_DIR/${safe}.exif.txt" 2>/dev/null || true
-      exiftool -json "$f" > "$META_DIR/${safe}.exif.json" 2>/dev/null || true
-    done < "$DOWNLOADED_LIST"
-  fi
+DL_COUNT="$(wc -l < "$DOWNLOADED_LIST" 2>/dev/null | tr -d ' ' || echo 0)"
+echo
+echo "[*] Downloads valid: $DL_COUNT"
+echo
 
-  echo "[*] Writing HTML report..."
-  NOW="$(date '+%Y-%m-%d %H:%M:%S')"
-  DL_COUNT="$(wc -l < "$DOWNLOADED_LIST" 2>/dev/null | tr -d ' ' || echo 0)"
+# Extract metadata
+echo "[*] Extracting metadata (exiftool)..."
+if [[ -s "$DOWNLOADED_LIST" ]]; then
+  while IFS= read -r f; do
+    [[ -z "$f" ]] && continue
+    bn="$(basename "$f")"
+    safe="${bn//[^a-zA-Z0-9._-]/_}"
+    exiftool "$f" > "$META_DIR/${safe}.exif.txt" 2>/dev/null || true
+    exiftool -json "$f" > "$META_DIR/${safe}.exif.json" 2>/dev/null || true
+  done < "$DOWNLOADED_LIST"
+fi
 
-  {
-    cat <<EOF
+# Build HTML report
+echo "[*] Writing HTML report..."
+NOW="$(date '+%Y-%m-%d %H:%M:%S')"
+
+{
+  cat <<EOF
 <!doctype html>
 <html lang="pt-BR">
 <head>
@@ -575,137 +508,146 @@ if [[ "$MODE" == "full" ]]; then
         <thead><tr><th>#</th><th>URL</th></tr></thead>
         <tbody>
 EOF
-    n=0
-    while IFS= read -r u; do
-      [[ -z "$u" ]] && continue
-      n=$((n+1))
-      ue="$(printf "%s" "$u" | html_escape)"
-      printf '          <tr><td>%d</td><td><a href="%s" target="_blank" rel="noreferrer">%s</a></td></tr>\n' "$n" "$ue" "$ue"
-    done < "$ALL_URLS_FILE"
 
-    cat <<EOF
+  n=0
+  while IFS= read -r u; do
+    [[ -z "$u" ]] && continue
+    n=$((n+1))
+    ue="$(printf "%s" "$u" | html_escape)"
+    printf '          <tr><td>%d</td><td><a href="%s" target="_blank" rel="noreferrer">%s</a></td></tr>\n' "$n" "$ue" "$ue"
+  done < "$ALL_URLS_FILE"
+
+  cat <<EOF
         </tbody>
       </table>
     </div>
 EOF
 
-    if [[ -s "$DOWNLOADED_LIST" ]]; then
-      cat <<EOF
+  if [[ -s "$DOWNLOADED_LIST" ]]; then
+    cat <<EOF
     <div class="card">
       <h2>2) Downloaded Files</h2>
       <table>
         <thead><tr><th>#</th><th>Arquivo</th><th>SHA256</th><th>Tamanho (bytes)</th><th>Tipo</th></tr></thead>
         <tbody>
 EOF
-      n=0
-      while IFS= read -r f; do
-        [[ -z "$f" ]] && continue
-        n=$((n+1))
-        bn="$(basename "$f")"
-        sha="$(sha256sum "$f" 2>/dev/null | awk '{print $1}')"
-        sz="$(stat -c%s "$f" 2>/dev/null || echo "?")"
-        ft="$(file -b "$f" 2>/dev/null | head -c 110)"
-        bne="$(printf "%s" "$bn" | html_escape)"
-        fte="$(printf "%s" "$ft" | html_escape)"
-        printf '          <tr><td>%d</td><td>%s</td><td><code>%s</code></td><td><code>%s</code></td><td>%s</td></tr>\n' \
-          "$n" "$bne" "$sha" "$sz" "$fte"
-      done < "$DOWNLOADED_LIST"
+    n=0
+    while IFS= read -r f; do
+      [[ -z "$f" ]] && continue
+      n=$((n+1))
+      bn="$(basename "$f")"
+      sha="$(sha256sum "$f" 2>/dev/null | awk '{print $1}')"
+      sz="$(stat -c%s "$f" 2>/dev/null || echo "?")"
+      ft="$(file -b "$f" 2>/dev/null | head -c 120)"
+      bne="$(printf "%s" "$bn" | html_escape)"
+      fte="$(printf "%s" "$ft" | html_escape)"
+      printf '          <tr><td>%d</td><td>%s</td><td><code>%s</code></td><td><code>%s</code></td><td>%s</td></tr>\n' \
+        "$n" "$bne" "$sha" "$sz" "$fte"
+    done < "$DOWNLOADED_LIST"
 
-      cat <<EOF
+    cat <<EOF
         </tbody>
       </table>
     </div>
-EOF
 
-      cat <<EOF
     <div class="card">
-      <h2>3) Metadata Highlights</h2>
-      <p class="muted">Extraído via <code>exiftool</code> (somente campos importantes).</p>
+      <h2>3) Metadata Highlights (Important Only)</h2>
+      <p class="muted">Extraído via <code>exiftool</code>. Campos importantes por arquivo abaixo.</p>
 EOF
 
-      if have_cmd jq && ls "$META_DIR"/*.exif.json >/dev/null 2>&1; then
-        cat <<EOF
-      <h3>3.1) Top tools/software</h3>
-      <pre>
-EOF
-        jq -r '.[] | (.CreatorTool // empty),
-                    (.Producer // empty),
-                    (."PDF Producer" // empty),
-                    (.Software // empty),
-                    (.Application // empty),
-                    (.Generator // empty)
-              ' "$META_DIR"/*.exif.json 2>/dev/null \
-          | awk 'NF' | sort | uniq -c | sort -nr | head -n 25 \
-          | html_escape
-        cat <<EOF
-      </pre>
-EOF
-      else
-        cat <<EOF
-      <h3>3.1) Top tools/software (install jq for better results)</h3>
-      <pre>
-EOF
-        count_software_from_txts "$META_DIR" | html_escape
-        cat <<EOF
-      </pre>
-EOF
-      fi
-
+    if have_cmd jq && ls "$META_DIR"/*.exif.json >/dev/null 2>&1; then
       cat <<EOF
-      <h3>3.2) Per-file highlights</h3>
-EOF
-
-      while IFS= read -r f; do
-        [[ -z "$f" ]] && continue
-        bn="$(basename "$f")"
-        safe="${bn//[^a-zA-Z0-9._-]/_}"
-        txt="$META_DIR/${safe}.exif.txt"
-        [[ ! -f "$txt" ]] && continue
-        bne="$(printf "%s" "$bn" | html_escape)"
-        cat <<EOF
-      <h3>${bne}</h3>
+      <h3>3.1) Top tools/software (contagem aproximada)</h3>
       <pre>
 EOF
-        top_kv_from_exif_full "$txt" | html_escape
-        cat <<EOF
-      </pre>
-EOF
-      done < "$DOWNLOADED_LIST"
-
+      jq -r '.[] | (.CreatorTool // empty),
+                  (.Producer // empty),
+                  (."PDF Producer" // empty),
+                  (.Software // empty),
+                  (.Application // empty),
+                  (.Generator // empty)
+            ' "$META_DIR"/*.exif.json 2>/dev/null \
+        | awk 'NF' | sort | uniq -c | sort -nr | head -n 25 \
+        | html_escape
       cat <<EOF
-    </div>
+      </pre>
 EOF
     else
       cat <<EOF
-    <div class="card">
-      <h2>2) Downloads / Metadata</h2>
-      <p class="muted">Nenhum arquivo baixado. Tente engines <code>brave,bing</code> e busque só <code>pdf</code>.</p>
-    </div>
+      <h3>3.1) Top tools/software (instale jq para melhor qualidade)</h3>
+      <pre>
+EOF
+      count_software_from_txts "$META_DIR" | html_escape
+      cat <<EOF
+      </pre>
 EOF
     fi
 
     cat <<EOF
+      <h3>3.2) Per-file highlights</h3>
+EOF
+
+    while IFS= read -r f; do
+      [[ -z "$f" ]] && continue
+      bn="$(basename "$f")"
+      safe="${bn//[^a-zA-Z0-9._-]/_}"
+      txt="$META_DIR/${safe}.exif.txt"
+      [[ ! -f "$txt" ]] && continue
+      bne="$(printf "%s" "$bn" | html_escape)"
+      cat <<EOF
+      <h3>${bne}</h3>
+      <pre>
+EOF
+      top_kv_from_exif_full "$txt" | html_escape
+      cat <<EOF
+      </pre>
+EOF
+    done < "$DOWNLOADED_LIST"
+
+    cat <<EOF
+    </div>
+EOF
+  else
+    cat <<EOF
+    <div class="card">
+      <h2>2) Downloads / Metadata</h2>
+      <p class="muted">Nenhum arquivo baixado. Possíveis causas: bloqueio, rate-limit, links indiretos.</p>
+      <p class="muted">Tente outro domínio ou aguarde e rode de novo.</p>
+    </div>
+EOF
+  fi
+
+  cat <<EOF
     <div class="card">
       <h2>Next Steps</h2>
       <ul>
         <li>Priorize documentos por <b>Author/Company</b> e <b>CreatorTool/Producer</b> incomuns.</li>
         <li>Procure vazamentos de paths/usuários: <code>C:\\Users\\</code>, <code>/home/</code>, <code>\\\\server\\share</code>.</li>
+        <li>Correlacione achados com OSINT apenas com autorização.</li>
       </ul>
     </div>
+
+    <div class="card">
+      <div class="footer">
+        <span class="muted">Generated by FileHound v${VERSION}</span>
+        <span>•</span>
+        <span class="muted">Creator: ${CREATOR_NAME}</span>
+      </div>
+    </div>
+
   </div>
 </body>
 </html>
 EOF
-  } > "$REPORT_HTML"
+} > "$REPORT_HTML"
 
-  echo
-  echo "[✓] Done!"
-  echo "    - HTML Report: $REPORT_HTML"
-  echo
-  echo "[LINK] file://$(readlink -f "$REPORT_HTML")"
-  echo "[i] Abrir no navegador:"
-  echo "    xdg-open \"$(readlink -f "$REPORT_HTML")\""
-  echo
-else
-  echo "[i] Mode '$MODE' selected — HTML report generation skipped."
-fi
+ABS_REPORT="$(readlink -f "$REPORT_HTML")"
+echo
+echo "[✓] Finalizado!"
+echo "    - Pasta output: $OUTDIR"
+echo "    - Relatório:    $REPORT_HTML"
+echo
+echo "[LINK] file://$ABS_REPORT"
+echo "[i] Abrir no navegador:"
+echo "    xdg-open \"$ABS_REPORT\""
+echo
